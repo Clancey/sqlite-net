@@ -36,8 +36,8 @@ namespace SQLite
 	{
 		SQLiteConnectionString _connectionString;
         SQLiteOpenFlags _openFlags;
-		SQLiteConnection _connection;
-
+		SQLiteConnectionWithLock _connection;
+		bool isFullMutex;
         public SQLiteAsyncConnection(string databasePath, bool storeDateTimeAsTicks = true)
             : this(databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks)
         {
@@ -46,8 +46,9 @@ namespace SQLite
         public SQLiteAsyncConnection(string databasePath, SQLiteOpenFlags openFlags, bool storeDateTimeAsTicks = true)
         {
             _openFlags = openFlags;
-			_connection = new SQLiteConnection(databasePath, openFlags, storeDateTimeAsTicks);
-            _connectionString = new SQLiteConnectionString(databasePath, storeDateTimeAsTicks);
+			isFullMutex = _openFlags.HasFlag(SQLiteOpenFlags.FullMutex);
+			_connectionString = new SQLiteConnectionString(databasePath, storeDateTimeAsTicks);
+			_connection = new SQLiteConnectionWithLock(_connectionString,openFlags);
         }
 
 		public static void ResetPool()
@@ -57,7 +58,7 @@ namespace SQLite
 
 		public SQLiteConnectionWithLock GetReadConnection ()
 		{
-			return SQLiteConnectionPool.Shared.GetConnection (_connectionString, _openFlags);
+			return isFullMutex ? _connection : SQLiteConnectionPool.Shared.GetConnection (_connectionString, _openFlags);
 		}
 
 		public SQLiteConnectionWithLock GetWriteConnection()
@@ -179,7 +180,10 @@ namespace SQLite
             return Task.Factory.StartNew(() =>
             {
                 var conn = GetReadConnection();
-				return conn.Get<T>(pk);
+                using (conn.Lock())
+                {
+                    return conn.Get<T>(pk);
+                }
             });
         }
 
@@ -188,7 +192,9 @@ namespace SQLite
 		{
 			return Task.Factory.StartNew (() => {
 				var conn = GetReadConnection ();
-				return conn.Find<T> (pk);
+				using (conn.Lock ()) {
+					return conn.Find<T> (pk);
+				}
 			});
 		}
 		
@@ -198,7 +204,10 @@ namespace SQLite
             return Task.Factory.StartNew(() =>
             {
                 var conn = GetReadConnection();
-				return conn.Get<T> (predicate);
+                using (conn.Lock())
+                {
+                    return conn.Get<T> (predicate);
+                }
             });
         }
 
@@ -207,7 +216,9 @@ namespace SQLite
 		{
 			return Task.Factory.StartNew (() => {
 				var conn = GetReadConnection ();
-				return conn.Find<T> (predicate);
+				using (conn.Lock ()) {
+					return conn.Find<T> (predicate);
+				}
 			});
 		}
 
@@ -358,35 +369,45 @@ namespace SQLite
 		public Task<List<T>> ToListAsync ()
 		{
 			return Task.Factory.StartNew (() => {
-				return _innerQuery.ToList ();
+				using (((SQLiteConnectionWithLock)_innerQuery.Connection).Lock ()) {
+					return _innerQuery.ToList ();
+				}
 			});
 		}
 
 		public Task<int> CountAsync ()
 		{
 			return Task.Factory.StartNew (() => {
-				return _innerQuery.Count ();
+				using (((SQLiteConnectionWithLock)_innerQuery.Connection).Lock ()) {
+					return _innerQuery.Count ();
+				}
 			});
 		}
 
 		public Task<T> ElementAtAsync (int index)
 		{
 			return Task.Factory.StartNew (() => {
-				return _innerQuery.ElementAt (index);
+				using (((SQLiteConnectionWithLock)_innerQuery.Connection).Lock ()) {
+					return _innerQuery.ElementAt (index);
+				}
 			});
 		}
 
 		public Task<T> FirstAsync ()
 		{
 			return Task<T>.Factory.StartNew(() => {
-				return _innerQuery.First ();
+				using (((SQLiteConnectionWithLock)_innerQuery.Connection).Lock ()) {
+					return _innerQuery.First ();
+				}
 			});
 		}
 
 		public Task<T> FirstOrDefaultAsync ()
 		{
 			return Task<T>.Factory.StartNew(() => {
-				return _innerQuery.FirstOrDefault ();
+				using (((SQLiteConnectionWithLock)_innerQuery.Connection).Lock ()) {
+					return _innerQuery.FirstOrDefault ();
+				}
 			});
 		}
     }
@@ -479,6 +500,8 @@ namespace SQLite
 	{
 		readonly object _lockPoint = new object ();
 
+		public bool SkipLock { get; set; }
+
         public SQLiteConnectionWithLock (SQLiteConnectionString connectionString, SQLiteOpenFlags openFlags)
 			: base (connectionString.DatabasePath, openFlags, connectionString.StoreDateTimeAsTicks)
 		{
@@ -486,7 +509,7 @@ namespace SQLite
 
 		public IDisposable Lock ()
 		{
-			return new LockWrapper (_lockPoint);
+			return SkipLock ? (IDisposable)new FakeLockWrapper() : new LockWrapper (_lockPoint);
 		}
 
 		private class LockWrapper : IDisposable
@@ -502,6 +525,14 @@ namespace SQLite
 			public void Dispose ()
 			{
 				Monitor.Exit (_lockPoint);
+			}
+		}
+
+		class FakeLockWrapper : IDisposable
+		{
+			public void Dispose()
+			{
+				
 			}
 		}
 	}
