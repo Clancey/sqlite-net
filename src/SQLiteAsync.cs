@@ -416,7 +416,7 @@ namespace SQLite
 	{
 		public Dictionary<Type, int> Results { get; private set; }
 
-		internal CreateTablesResult ()
+		public CreateTablesResult ()
 		{
 			this.Results = new Dictionary<Type, int> ();
 		}
