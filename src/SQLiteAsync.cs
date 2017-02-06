@@ -39,7 +39,7 @@ namespace SQLite
 		SQLiteConnectionWithLock _connection;
 		bool isFullMutex;
         public SQLiteAsyncConnection(string databasePath, bool storeDateTimeAsTicks = true)
-            : this(databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks)
+            : this(databasePath, SQLiteOpenFlags.FullMutex | SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks)
         {
         }
         
@@ -64,6 +64,34 @@ namespace SQLite
 		public SQLiteConnectionWithLock GetWriteConnection()
 		{
 			return SQLiteConnectionPool.Shared.GetConnection(_connectionString, _openFlags);
+		}
+
+		public SQLiteConnectionWithLock GetConnection()
+		{
+			return GetWriteConnection();
+		}
+
+		public CreateTablesResult CreateTables(params Type[] types)
+		{
+			var result = new CreateTablesResult();
+			var conn = GetWriteConnection();
+			using (conn.Lock())
+			{
+				foreach (Type type in types)
+				{
+					try
+					{
+						int aResult = conn.CreateTable(type);
+						result.Results[type] = aResult;
+					}
+					catch (Exception)
+					{
+						System.Diagnostics.Debug.WriteLine("Error creating table for {0}", type);
+						throw;
+					}
+				}
+			}
+			return result;
 		}
 
 		public Task<CreateTablesResult> CreateTableAsync<T> (CreateFlags createFlags = CreateFlags.None)
