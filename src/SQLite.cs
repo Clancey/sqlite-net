@@ -237,6 +237,10 @@ namespace SQLite
 			StoreDateTimeAsTicks = storeDateTimeAsTicks;
 			
 			BusyTimeout = TimeSpan.FromSeconds (0.1);
+			if (openFlags.HasFlag(SQLiteOpenFlags.ReadWrite))
+			{
+				ExecuteScalar<string>("PRAGMA journal_mode=WAL");
+			}
 		}
 		
 #if __IOS__
