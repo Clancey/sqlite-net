@@ -13,16 +13,18 @@
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DefineConstants>USE_SQLITEPCL_RAW;RELEASE</DefineConstants>
+    <DefineConstants>USE_SQLITEPCL_RAW;MULTI_DATABASE_SUPPORT;RELEASE</DefineConstants>
     <DocumentationFile>bin\Release\$(TargetFramework)\SQLite-net.xml</DocumentationFile>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DefineConstants>USE_SQLITEPCL_RAW;DEBUG</DefineConstants>
+    <DefineConstants>USE_SQLITEPCL_RAW;MULTI_DATABASE_SUPPORT;DEBUG</DefineConstants>
     <DocumentationFile>bin\Debug\$(TargetFramework)\SQLite-net.xml</DocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.2" />
+    <PackageReference Include="MySqlConnector" Version="2.3.7" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\..\src\SQLite.cs">
@@ -30,6 +32,21 @@
     </Compile>
     <Compile Include="..\..\src\SQLiteAsync.cs">
       <Link>SQLiteAsync.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\DatabaseProviderFactory.cs">
+      <Link>DatabaseProviderFactory.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\Providers\SQLiteProvider.cs">
+      <Link>Providers\SQLiteProvider.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\Providers\MariaDBProvider.cs">
+      <Link>Providers\MariaDBProvider.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\Providers\SqlServerProvider.cs">
+      <Link>Providers\SqlServerProvider.cs</Link>
+    </Compile>
+    <Compile Include="..\..\src\Providers\AzureSqlProvider.cs">
+      <Link>Providers\AzureSqlProvider.cs</Link>
     </Compile>
     <None Include="..\..\LICENSE.txt" Pack="true" PackagePath="" />
   </ItemGroup>

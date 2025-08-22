@@ -166,6 +166,79 @@ namespace SQLite
 		FullTextSearch4 = 0x200
 	}
 
+	/// <summary>
+	/// Default SQLite provider for backward compatibility
+	/// </summary>
+	internal class DefaultSQLiteProvider : IDatabaseProvider
+	{
+		public string ProviderName => "SQLite";
+		public bool SupportsInsertOrReplace => true;
+		public bool SupportsMultipleStatements => true;
+		public bool RequiresNamedParameters => false;
+		public string ParameterPrefix => "?";
+		public bool SupportsIfNotExists => true;
+		
+		public bool CanHandleConnectionString(string connectionString) => true;
+		public string TransformConnectionString(string connectionString) => connectionString;
+		public string GetSqlType(Type clrType, int? maxLength = null) => string.Empty;
+		public string GetColumnDeclaration(string columnName, string dataType, bool isPrimaryKey, bool autoIncrement, bool isNotNull, bool isUnique, string defaultValue, string collation) => string.Empty;
+		public string QuoteIdentifier(string identifier) => $"\"{identifier}\"";
+		public string GetLimitClause(int? limit, int? offset) => string.Empty;
+		public string GetRandomFunction() => "RANDOM()";
+		public string GetLastInsertIdFunction() => "last_insert_rowid()";
+		public string GetCreateTablePrefix(bool isVirtual, string virtualUsing) => string.Empty;
+		public string GetCreateTableSuffix(bool withoutRowId) => string.Empty;
+		
+		public string GenerateInsertSql(TableMapping table, string extra) => string.Empty;
+		public string GenerateUpdateSql(TableMapping table) => string.Empty;
+		public string GenerateDeleteSql(TableMapping table) => string.Empty;
+		public string GenerateSelectSql(TableMapping table, string where = null, string orderBy = null, int? limit = null, int? offset = null) => string.Empty;
+		
+		public string GenerateSavepointSql(string savepointName) => $"savepoint \"{savepointName}\"";
+		public string GenerateRollbackToSavepointSql(string savepointName) => $"rollback to \"{savepointName}\"";
+		public string GenerateReleaseSavepointSql(string savepointName) => $"release \"{savepointName}\"";
+		
+		public System.Data.IDbConnection CreateConnection(string connectionString) => null;
+		public void ConfigureConnection(System.Data.IDbConnection connection) { }
+	}
+	
+	/// <summary>
+	/// Interface for database providers that handle different database types
+	/// </summary>
+	public interface IDatabaseProvider
+	{
+		string ProviderName { get; }
+		bool SupportsInsertOrReplace { get; }
+		bool SupportsMultipleStatements { get; }
+		bool RequiresNamedParameters { get; }
+		string ParameterPrefix { get; }
+		bool SupportsIfNotExists { get; }
+
+		bool CanHandleConnectionString(string connectionString);
+		string TransformConnectionString(string connectionString);
+		string GetSqlType(Type clrType, int? maxLength = null);
+		string GetColumnDeclaration(string columnName, string dataType, bool isPrimaryKey, bool autoIncrement, bool isNotNull, bool isUnique, string defaultValue, string collation);
+		string QuoteIdentifier(string identifier);
+		string GetLimitClause(int? limit, int? offset);
+		string GetRandomFunction();
+		string GetLastInsertIdFunction();
+		string GetCreateTablePrefix(bool isVirtual, string virtualUsing);
+		string GetCreateTableSuffix(bool withoutRowId);
+		string GenerateInsertSql(TableMapping table, string extra);
+		string GenerateUpdateSql(TableMapping table);
+		string GenerateDeleteSql(TableMapping table);
+		string GenerateSelectSql(TableMapping table, string where = null, string orderBy = null, int? limit = null, int? offset = null);
+		
+		// Transaction support
+		string GenerateSavepointSql(string savepointName);
+		string GenerateRollbackToSavepointSql(string savepointName);
+		string GenerateReleaseSavepointSql(string savepointName);
+		
+		// ADO.NET Connection Management
+		System.Data.IDbConnection CreateConnection(string connectionString);
+		void ConfigureConnection(System.Data.IDbConnection connection);
+	}
+
 	public interface ISQLiteConnection : IDisposable
 	{
 		Sqlite3DatabaseHandle Handle { get; }
@@ -456,6 +529,11 @@ namespace SQLite
 		public Sqlite3DatabaseHandle Handle { get; private set; }
 		static readonly Sqlite3DatabaseHandle NullHandle = default (Sqlite3DatabaseHandle);
 		static readonly Sqlite3BackupHandle NullBackupHandle = default (Sqlite3BackupHandle);
+		
+		/// <summary>
+		/// ADO.NET connection for non-SQLite providers
+		/// </summary>
+		internal System.Data.IDbConnection _adoNetConnection;
 
 		/// <summary>
 		/// Gets the database path used by this connection.
@@ -505,6 +583,11 @@ namespace SQLite
 		/// <value>The date time style.</value>
 		internal System.Globalization.DateTimeStyles DateTimeStyle { get; private set; }
 
+		/// <summary>
+		/// The database provider used by this connection.
+		/// </summary>
+		public IDatabaseProvider Provider { get; private set; }
+
 #if USE_SQLITEPCL_RAW && !NO_SQLITEPCL_RAW_BATTERIES
 		static SQLiteConnection ()
 		{
@@ -527,8 +610,28 @@ namespace SQLite
 		/// the storeDateTimeAsTicks parameter.
 		/// </param>
 		public SQLiteConnection (string databasePath, bool storeDateTimeAsTicks = true)
-			: this (new SQLiteConnectionString (databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks))
 		{
+#if MULTI_DATABASE_SUPPORT
+			// Detect if this is a multi-database connection string
+			Provider = DatabaseProviderFactory.GetProvider(databasePath);
+			
+			if (Provider.ProviderName == "SQLite")
+			{
+				// Use traditional SQLite constructor
+				var connectionString = new SQLiteConnectionString (databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks);
+				InitializeSQLiteConnection(connectionString);
+			}
+			else
+			{
+				// Use multi-database approach
+				InitializeMultiDatabaseConnection(databasePath, storeDateTimeAsTicks);
+			}
+#else
+			// Traditional SQLite-only behavior
+			Provider = new DefaultSQLiteProvider(); // Always set a provider
+			var connectionString = new SQLiteConnectionString (databasePath, SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create, storeDateTimeAsTicks);
+			InitializeSQLiteConnection(connectionString);
+#endif
 		}
 
 		/// <summary>
@@ -549,17 +652,72 @@ namespace SQLite
 		/// the storeDateTimeAsTicks parameter.
 		/// </param>
 		public SQLiteConnection (string databasePath, SQLiteOpenFlags openFlags, bool storeDateTimeAsTicks = true)
-			: this (new SQLiteConnectionString (databasePath, openFlags, storeDateTimeAsTicks))
 		{
+#if MULTI_DATABASE_SUPPORT
+			// Detect if this is a multi-database connection string
+			Provider = DatabaseProviderFactory.GetProvider(databasePath);
+			
+			if (Provider.ProviderName == "SQLite")
+			{
+				// Use traditional SQLite constructor
+				var connectionString = new SQLiteConnectionString (databasePath, openFlags, storeDateTimeAsTicks);
+				InitializeSQLiteConnection(connectionString);
+			}
+			else
+			{
+				// Use multi-database approach  
+				InitializeMultiDatabaseConnection(databasePath, storeDateTimeAsTicks);
+			}
+#else
+			// Traditional SQLite-only behavior
+			Provider = new DefaultSQLiteProvider(); // Always set a provider
+			var connectionString = new SQLiteConnectionString (databasePath, openFlags, storeDateTimeAsTicks);
+			InitializeSQLiteConnection(connectionString);
+#endif
 		}
 
 		/// <summary>
-		/// Constructs a new SQLiteConnection and opens a SQLite database specified by databasePath.
+		/// Initializes the connection for multi-database providers (non-SQLite)
 		/// </summary>
-		/// <param name="connectionString">
-		/// Details on how to find and open the database.
-		/// </param>
-		public SQLiteConnection (SQLiteConnectionString connectionString)
+		private void InitializeMultiDatabaseConnection(string connectionString, bool storeDateTimeAsTicks)
+		{
+			DatabasePath = connectionString;
+			StoreDateTimeAsTicks = storeDateTimeAsTicks;
+			StoreTimeSpanAsTicks = true;
+			DateTimeStringFormat = "yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fff";
+			DateTimeStyle = System.Globalization.DateTimeStyles.None;
+			
+			// Set LibVersionNumber to 0 for non-SQLite providers
+			LibVersionNumber = 0;
+			
+			// For non-SQLite providers, we don't use Handle
+			Handle = default(Sqlite3DatabaseHandle);
+			
+			// Create and configure the ADO.NET connection
+			try 
+			{
+				var cleanConnectionString = Provider.TransformConnectionString(connectionString);
+				_adoNetConnection = Provider.CreateConnection(cleanConnectionString);
+				Provider.ConfigureConnection(_adoNetConnection);
+				
+				if (Trace)
+				{
+					Tracer?.Invoke($"[{Provider.ProviderName}] Created connection: {cleanConnectionString}");
+				}
+				
+				// Mark connection as open
+				_open = true;
+			}
+			catch (Exception ex)
+			{
+				throw SQLiteException.New(SQLite3.Result.Error, $"Failed to initialize {Provider.ProviderName} connection: {ex.Message}");
+			}
+		}
+
+		/// <summary>
+		/// Initializes the connection for SQLite database
+		/// </summary>
+		private void InitializeSQLiteConnection(SQLiteConnectionString connectionString)
 		{
 			if (connectionString == null)
 				throw new ArgumentNullException (nameof (connectionString));
@@ -601,6 +759,7 @@ namespace SQLite
 			Tracer = line => Debug.WriteLine (line);
 
 			connectionString.PreKeyAction?.Invoke (this);
+
 			if (connectionString.Key is string stringKey) {
 				SetKey (stringKey);
 			}
@@ -610,7 +769,25 @@ namespace SQLite
 			else if (connectionString.Key != null) {
 				throw new InvalidOperationException ("Encryption keys must be strings or byte arrays");
 			}
+
 			connectionString.PostKeyAction?.Invoke (this);
+		}
+
+		/// <summary>
+		/// Constructs a new SQLiteConnection and opens a SQLite database specified by databasePath.
+		/// </summary>
+		/// <param name="connectionString">
+		/// Details on how to find and open the database.
+		/// </param>
+		public SQLiteConnection (SQLiteConnectionString connectionString)
+		{
+			// SQLiteConnectionString is always for SQLite
+#if MULTI_DATABASE_SUPPORT
+			Provider = new Providers.SQLiteProvider();
+#else
+			Provider = null; // No provider available
+#endif
+			InitializeSQLiteConnection(connectionString);
 		}
 
 		/// <summary>
@@ -1769,7 +1946,17 @@ namespace SQLite
 			string retVal = "S" + _rand.Next (short.MaxValue) + "D" + depth;
 
 			try {
-				Execute ("savepoint " + retVal);
+				string savepointSql;
+				if (Provider != null)
+				{
+					savepointSql = Provider.GenerateSavepointSql(retVal);
+				}
+				else
+				{
+					// Fallback to SQLite syntax
+					savepointSql = $"savepoint \"{retVal}\"";
+				}
+				Execute (savepointSql);
 			}
 			catch (Exception ex) {
 				var sqlExp = ex as SQLiteException;
@@ -1887,7 +2074,46 @@ namespace SQLite
 #else
 						Thread.VolatileWrite (ref _transactionDepth, depth);
 #endif
-						Execute (cmd + savepoint);
+						// Use provider-specific SQL generation
+						string sql;
+						if (Provider != null)
+						{
+							if (cmd.StartsWith("rollback to", StringComparison.OrdinalIgnoreCase))
+							{
+								sql = Provider.GenerateRollbackToSavepointSql(savepoint);
+							}
+							else if (cmd.StartsWith("release", StringComparison.OrdinalIgnoreCase))
+							{
+								sql = Provider.GenerateReleaseSavepointSql(savepoint);
+							}
+							else
+							{
+								// Fallback to original behavior for unknown commands
+								sql = cmd + savepoint;
+							}
+						}
+						else
+						{
+							// Fallback to SQLite syntax when provider is not available
+							if (cmd.StartsWith("rollback to", StringComparison.OrdinalIgnoreCase))
+							{
+								sql = $"rollback to \"{savepoint}\"";
+							}
+							else if (cmd.StartsWith("release", StringComparison.OrdinalIgnoreCase))
+							{
+								sql = $"release \"{savepoint}\"";
+							}
+							else
+							{
+								sql = cmd + savepoint;
+							}
+						}
+						
+						// Only execute if SQL is not empty (some providers may return empty for release)
+						if (!string.IsNullOrEmpty(sql))
+						{
+							Execute (sql);
+						}
 						return;
 					}
 				}
@@ -2619,6 +2845,33 @@ namespace SQLite
 				}
 				finally {
 					Handle = NullHandle;
+					_open = false;
+				}
+			}
+			
+			// Handle ADO.NET connection disposal
+			if (_open && _adoNetConnection != null) {
+				try {
+					if (disposing) {
+						lock (_insertCommandMap) {
+							foreach (var sqlInsertCommand in _insertCommandMap.Values) {
+								sqlInsertCommand.Dispose ();
+							}
+							_insertCommandMap.Clear ();
+						}
+						
+						if (_adoNetConnection.State == System.Data.ConnectionState.Open) {
+							_adoNetConnection.Close();
+						}
+						_adoNetConnection.Dispose();
+						
+						if (Trace) {
+							Tracer?.Invoke($"[{Provider?.ProviderName}] Connection closed and disposed");
+						}
+					}
+				}
+				finally {
+					_adoNetConnection = null;
 					_open = false;
 				}
 			}
@@ -3470,12 +3723,320 @@ namespace SQLite
 			CommandText = "";
 		}
 
+		/// <summary>
+		/// Executes non-query commands using ADO.NET for non-SQLite providers
+		/// </summary>
+		private int ExecuteAdoNetNonQuery()
+		{
+			if (_conn.Trace) {
+				_conn.Tracer?.Invoke ($"[ADO.NET {_conn.Provider.ProviderName}] Executing: " + this);
+			}
+			
+			if (_conn._adoNetConnection == null)
+			{
+				throw new InvalidOperationException("ADO.NET connection is not initialized");
+			}
+			
+			try
+			{
+				// Ensure connection is open
+				if (_conn._adoNetConnection.State != System.Data.ConnectionState.Open)
+				{
+					_conn._adoNetConnection.Open();
+				}
+				
+				using (var command = _conn._adoNetConnection.CreateCommand())
+				{
+					command.CommandText = CommandText;
+					
+					// Bind parameters
+					BindParametersToAdoNetCommand(command);
+					
+					var result = command.ExecuteNonQuery();
+					
+					if (_conn.Trace) {
+						_conn.Tracer?.Invoke ($"[ADO.NET {_conn.Provider.ProviderName}] Rows affected: {result}");
+					}
+					
+					return result;
+				}
+			}
+			catch (Exception ex)
+			{
+				throw SQLiteException.New(SQLite3.Result.Error, $"Failed to execute non-query on {_conn.Provider.ProviderName}: {ex.Message}");
+			}
+		}
+
+		/// <summary>
+		/// Binds parameters to an ADO.NET command
+		/// </summary>
+		private void BindParametersToAdoNetCommand(System.Data.IDbCommand command)
+		{
+			if (_bindings == null || _bindings.Count == 0)
+				return;
+				
+			for (int i = 0; i < _bindings.Count; i++)
+			{
+				var binding = _bindings[i];
+				var parameter = command.CreateParameter();
+				
+				// Set parameter name based on provider requirements
+				if (_conn.Provider.RequiresNamedParameters)
+				{
+					parameter.ParameterName = $"{_conn.Provider.ParameterPrefix}param{i}";
+				}
+				else
+				{
+					parameter.ParameterName = $"param{i}";
+				}
+				
+				// Handle null values
+				if (binding.Value == null)
+				{
+					parameter.Value = System.DBNull.Value;
+				}
+				else
+				{
+					// Convert value based on type
+					parameter.Value = ConvertValueForAdoNet(binding.Value);
+				}
+				
+				command.Parameters.Add(parameter);
+			}
+		}
+		
+		/// <summary>
+		/// Converts a value to a format suitable for ADO.NET
+		/// </summary>
+		private object ConvertValueForAdoNet(object value)
+		{
+			if (value == null) return System.DBNull.Value;
+			
+			// Handle DateTime conversion
+			if (value is DateTime dt)
+			{
+				return _conn.StoreDateTimeAsTicks ? dt.Ticks : (object)dt;
+			}
+			
+			// Handle DateTimeOffset conversion
+			if (value is DateTimeOffset dto)
+			{
+				return _conn.StoreDateTimeAsTicks ? dto.Ticks : (object)dto.DateTime;
+			}
+			
+			// Handle TimeSpan conversion
+			if (value is TimeSpan ts)
+			{
+				return _conn.StoreTimeSpanAsTicks ? ts.Ticks : (object)ts.ToString();
+			}
+			
+			// Handle Guid conversion
+			if (value is Guid guid)
+			{
+				return guid.ToString();
+			}
+			
+			// Handle enum conversion
+			if (value.GetType().IsEnum)
+			{
+				return Convert.ToInt32(value);
+			}
+			
+			return value;
+		}
+
+		/// <summary>
+		/// Executes query commands using ADO.NET for non-SQLite providers
+		/// </summary>
+		private IEnumerable<T> ExecuteAdoNetQuery<T>(TableMapping map)
+		{
+			if (_conn.Trace) {
+				_conn.Tracer?.Invoke ($"[ADO.NET {_conn.Provider.ProviderName}] Executing Query: " + this);
+			}
+			
+			if (_conn._adoNetConnection == null)
+			{
+				throw new InvalidOperationException("ADO.NET connection is not initialized");
+			}
+			
+			try
+			{
+				// Ensure connection is open
+				if (_conn._adoNetConnection.State != System.Data.ConnectionState.Open)
+				{
+					_conn._adoNetConnection.Open();
+				}
+				
+				using (var command = _conn._adoNetConnection.CreateCommand())
+				{
+					command.CommandText = CommandText;
+					
+					// Bind parameters
+					BindParametersToAdoNetCommand(command);
+					
+					using (var reader = command.ExecuteReader())
+					{
+						var results = new List<T>();
+						
+						while (reader.Read())
+						{
+							var obj = MapReaderToObject<T>(reader, map);
+							results.Add(obj);
+						}
+						
+						if (_conn.Trace) {
+							_conn.Tracer?.Invoke ($"[ADO.NET {_conn.Provider.ProviderName}] Retrieved {results.Count} rows");
+						}
+						
+						return results;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				throw SQLiteException.New(SQLite3.Result.Error, $"Failed to execute query on {_conn.Provider.ProviderName}: {ex.Message}");
+			}
+		}
+		
+		/// <summary>
+		/// Maps a data reader to an object using TableMapping
+		/// </summary>
+		private T MapReaderToObject<T>(System.Data.IDataReader reader, TableMapping map)
+		{
+			var obj = (T)Activator.CreateInstance(map.MappedType);
+			
+			for (int i = 0; i < reader.FieldCount; i++)
+			{
+				var columnName = reader.GetName(i);
+				var column = map.Columns.FirstOrDefault(c => 
+					string.Equals(c.Name, columnName, StringComparison.OrdinalIgnoreCase));
+				
+				if (column == null) continue;
+				
+				var value = reader.GetValue(i);
+				if (value == System.DBNull.Value) value = null;
+				
+				// Convert value back from database format
+				var convertedValue = ConvertValueFromAdoNet(value, column.ColumnType);
+				column.SetValue(obj, convertedValue);
+			}
+			
+			return obj;
+		}
+		
+		/// <summary>
+		/// Converts a value from ADO.NET back to the appropriate CLR type
+		/// </summary>
+		private object ConvertValueFromAdoNet(object value, Type targetType)
+		{
+			if (value == null || value == System.DBNull.Value) return null;
+			
+			// Handle nullable types
+			var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+			
+			// Direct assignment if types match
+			if (underlyingType.IsAssignableFrom(value.GetType()))
+			{
+				return value;
+			}
+			
+			// Handle DateTime conversion
+			if (underlyingType == typeof(DateTime))
+			{
+				if (value is long ticks && _conn.StoreDateTimeAsTicks)
+				{
+					return new DateTime(ticks);
+				}
+				if (value is string dateStr)
+				{
+					return DateTime.Parse(dateStr);
+				}
+				return Convert.ToDateTime(value);
+			}
+			
+			// Handle DateTimeOffset conversion
+			if (underlyingType == typeof(DateTimeOffset))
+			{
+				if (value is long ticks && _conn.StoreDateTimeAsTicks)
+				{
+					return new DateTimeOffset(ticks, TimeSpan.Zero);
+				}
+				if (value is DateTime dt)
+				{
+					return new DateTimeOffset(dt);
+				}
+				return DateTimeOffset.Parse(value.ToString());
+			}
+			
+			// Handle TimeSpan conversion
+			if (underlyingType == typeof(TimeSpan))
+			{
+				if (value is long ticks && _conn.StoreTimeSpanAsTicks)
+				{
+					return new TimeSpan(ticks);
+				}
+				if (value is string timeStr)
+				{
+					return TimeSpan.Parse(timeStr);
+				}
+				return TimeSpan.FromMilliseconds(Convert.ToDouble(value));
+			}
+			
+			// Handle Guid conversion
+			if (underlyingType == typeof(Guid))
+			{
+				if (value is string guidStr)
+				{
+					return Guid.Parse(guidStr);
+				}
+				if (value is byte[] guidBytes)
+				{
+					return new Guid(guidBytes);
+				}
+				return Guid.Parse(value.ToString());
+			}
+			
+			// Handle enum conversion
+			if (underlyingType.IsEnum)
+			{
+				if (value is string enumStr)
+				{
+					return Enum.Parse(underlyingType, enumStr);
+				}
+				return Enum.ToObject(underlyingType, value);
+			}
+			
+			// Handle boolean conversion
+			if (underlyingType == typeof(bool))
+			{
+				if (value is string boolStr)
+				{
+					return bool.Parse(boolStr);
+				}
+				if (value is int intVal)
+				{
+					return intVal != 0;
+				}
+				return Convert.ToBoolean(value);
+			}
+			
+			// Default conversion
+			return Convert.ChangeType(value, underlyingType);
+		}
+
 		public int ExecuteNonQuery ()
 		{
 			if (_conn.Trace) {
 				_conn.Tracer?.Invoke ("Executing: " + this);
 			}
 
+			// Check if we're using a non-SQLite provider
+			if (_conn.Provider != null && _conn.Provider.ProviderName != "SQLite")
+			{
+				return ExecuteAdoNetNonQuery();
+			}
+
+			// SQLite execution path
 			var r = SQLite3.Result.OK;
 			var stmt = Prepare ();
 			r = SQLite3.Step (stmt);
@@ -3539,6 +4100,16 @@ namespace SQLite
 		{
 			if (_conn.Trace) {
 				_conn.Tracer?.Invoke ("Executing Query: " + this);
+			}
+
+			// Check if we're using a non-SQLite provider
+			if (_conn.Provider != null && _conn.Provider.ProviderName != "SQLite")
+			{
+				foreach (var item in ExecuteAdoNetQuery<T>(map))
+				{
+					yield return item;
+				}
+				yield break;
 			}
 
 			var stmt = Prepare ();
@@ -3694,6 +4265,15 @@ namespace SQLite
 
 		Sqlite3Statement Prepare ()
 		{
+			// Check if we're using a non-SQLite provider
+			if (_conn.Provider != null && _conn.Provider.ProviderName != "SQLite")
+			{
+				// For non-SQLite providers, we can't use SQLite3.Prepare2
+				// This should not be called for non-SQLite providers
+				// Instead, the ExecuteNonQuery/ExecuteQuery methods should use ADO.NET directly
+				throw new NotSupportedException($"Prepare() method is not supported for {_conn.Provider.ProviderName} provider. Use ExecuteAdoNetNonQuery/ExecuteAdoNetQuery instead.");
+			}
+			
 			var stmt = SQLite3.Prepare2 (_conn.Handle, CommandText);
 			BindAll (stmt);
 			return stmt;
