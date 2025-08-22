@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mariadb:
     image: mariadb:latest
@@ -14,14 +12,14 @@ services:
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
     container_name: sqlserver-test
     environment:
       ACCEPT_EULA: Y
-      SA_PASSWORD: YourPassword123!
+      MSSQL_SA_PASSWORD: YourPassword123!
+      MSSQL_PID: Developer
     ports:
       - "1433:1433"
-    volumes:
-      - sqlserver_data:/var/opt/mssql
 
 volumes:
   mariadb_data:

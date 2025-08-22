@@ -116,13 +116,13 @@ namespace MultiDatabaseSample
             {
                 Console.WriteLine($"⚠ SQL Server demo skipped: {ex.Message}");
                 Console.WriteLine("  To run SQL Server demo, start the container:");
-                Console.WriteLine("  docker run --name sqlserver-test -e ACCEPT_EULA=Y -e SA_PASSWORD=YourPassword123! -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest");
+                Console.WriteLine("  docker run --name sqlserver-test --platform linux/amd64 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=YourPassword123! -e MSSQL_PID=Developer -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest");
             }
         }
 
         static void RunAzureSqlDemo()
         {
-            Console.WriteLine("4. Azure SQL Demo (Uses same engine as SQL Server)");
+            Console.WriteLine("4. Azure SQL Demo (Uses same container as SQL Server)");
             Console.WriteLine("----------------------------------------");
 
             try

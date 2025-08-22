@@ -14,6 +14,8 @@ This sample demonstrates the new multi-database support in SQLite-NET, allowing 
 - .NET 8.0 SDK or later
 - Docker (for running database servers)
 
+> **Note for Mac Users**: The docker-compose uses SQL Server with x64 emulation via Rosetta 2. This works well on M1/M2 Macs but may use more resources than native containers. For production use, consider using actual Azure SQL or a Linux server.
+
 ## Quick Start
 
 ### 1. Start Database Servers (Optional)
@@ -26,7 +28,7 @@ docker-compose up -d
 
 # Or start them individually:
 docker run --name mariadb-test -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=testdb -p 3307:3306 -d mariadb:latest
-docker run --name sqlserver-test -e ACCEPT_EULA=Y -e SA_PASSWORD=YourPassword123! -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
+docker run --name sqlserver-test --platform linux/amd64 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=YourPassword123! -e MSSQL_PID=Developer -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
 ```
 
 ### 2. Run the Sample
