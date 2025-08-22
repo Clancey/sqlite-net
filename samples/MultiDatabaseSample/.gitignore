@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# User-specific files
+.vs/
+*.user
