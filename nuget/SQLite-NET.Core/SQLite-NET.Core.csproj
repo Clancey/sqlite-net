@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <PackageId>SQLite-NET.Core</PackageId>
+    <PackageVersion>1.11.0</PackageVersion>
+    <Authors>Frank Krueger</Authors>
+    <Owners>Frank Krueger</Owners>
+    <Summary>SQLite-NET Core abstractions and interfaces for multi-database support</Summary>
+    <Description>Core abstractions and interfaces for SQLite-NET multi-database support. This package provides the foundational types and contracts needed to build database providers for SQLite-NET.</Description>
+    <PackageReleaseNotes>Multi-database provider architecture with shared abstractions</PackageReleaseNotes>
+    <PackageTags>sqlite database sql orm netstandard core abstractions provider</PackageTags>
+    <PackageProjectUrl>https://github.com/praeclarum/sqlite-net</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>Logo-low.png</PackageIcon>
+    <RepositoryUrl>https://github.com/praeclarum/sqlite-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../Logo-low.png">
+      <Pack>True</Pack>
+      <PackagePath>.</PackagePath>
+    </None>
+  </ItemGroup>
+
+</Project>

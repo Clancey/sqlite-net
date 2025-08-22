@@ -1010,7 +1010,19 @@ namespace SQLite
 		/// </param>
 		public int DropTable (TableMapping map)
 		{
-			var query = string.Format ("drop table if exists \"{0}\"", map.TableName);
+			string query;
+			if (Provider != null && Provider.ProviderName == "MariaDB")
+			{
+				query = string.Format ("drop table if exists `{0}`", map.TableName);
+			}
+			else if (Provider != null && (Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL"))
+			{
+				query = string.Format ("if exists (select * from sysobjects where name='{0}' and xtype='U') drop table [{0}]", map.TableName);
+			}
+			else
+			{
+				query = string.Format ("drop table if exists \"{0}\"", map.TableName);
+			}
 			return Execute (query);
 		}
 
@@ -1340,7 +1352,16 @@ namespace SQLite
 				sql = $"CREATE {uniqueStr}INDEX IF NOT EXISTS \"{indexName}\" ON \"{tableName}\" (\"{string.Join("\", \"", columnNames)}\")";
 			}
 			
-			return Execute(sql);
+			try
+			{
+				return Execute(sql);
+			}
+			catch (Exception ex) when (ex.Message.Contains("Duplicate key name") || ex.Message.Contains("already exists") || ex.Message.Contains("There is already"))
+			{
+				// Index already exists (unique columns in MariaDB auto-create an index)
+				// This is not an error, just skip
+				return 0;
+			}
 		}
 #endif
 
@@ -1585,7 +1606,7 @@ namespace SQLite
 							) THEN 1 ELSE 0 
 						END as pk
 					FROM INFORMATION_SCHEMA.COLUMNS c
-					WHERE TABLE_NAME = @p0
+					WHERE TABLE_NAME = @param0
 					ORDER BY ORDINAL_POSITION";
 				
 				// Use CreateCommand to properly handle parameters
@@ -2142,6 +2163,12 @@ namespace SQLite
 			string retVal = "S" + _rand.Next (short.MaxValue) + "D" + depth;
 
 			try {
+				// SQL Server and Azure SQL require an explicit transaction to use savepoints
+				if (depth == 0 && Provider != null && (Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL"))
+				{
+					Execute("BEGIN TRANSACTION");
+				}
+				
 				string savepointSql;
 				if (Provider != null)
 				{
@@ -2310,6 +2337,15 @@ namespace SQLite
 						{
 							Execute (sql);
 						}
+						
+						// SQL Server and Azure SQL: commit transaction when depth reaches 0
+						if (depth == 0 && Provider != null && 
+							(Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL") &&
+							cmd.StartsWith("release", StringComparison.OrdinalIgnoreCase))
+						{
+							Execute("COMMIT TRANSACTION");
+						}
+						
 						return;
 					}
 				}
@@ -2652,15 +2688,36 @@ namespace SQLite
 					count = insertCmd.ExecuteNonQuery (vals);
 				}
 				catch (SQLiteException ex) {
-					if (SQLite3.ExtendedErrCode (this.Handle) == SQLite3.ExtendedResult.ConstraintNotNull) {
-						throw NotNullConstraintViolationException.New (ex.Result, ex.Message, map, obj);
+					if (Provider == null || Provider.ProviderName == "SQLite")
+					{
+						if (SQLite3.ExtendedErrCode (this.Handle) == SQLite3.ExtendedResult.ConstraintNotNull) {
+							throw NotNullConstraintViolationException.New (ex.Result, ex.Message, map, obj);
+						}
 					}
 					throw;
 				}
 
 				if (map.HasAutoIncPK) {
-					var id = SQLite3.LastInsertRowid (Handle);
-					map.SetAutoIncPK (obj, id);
+					if (Provider != null && Provider.ProviderName != "SQLite")
+					{
+						// For non-SQLite providers, get the last insert ID using provider-specific function
+						var lastIdSql = $"SELECT {Provider.GetLastInsertIdFunction()}";
+						using (var cmd = _adoNetConnection.CreateCommand())
+						{
+							cmd.CommandText = lastIdSql;
+							var result = cmd.ExecuteScalar();
+							if (result != null && result != DBNull.Value)
+							{
+								var id = Convert.ToInt64(result);
+								map.SetAutoIncPK (obj, id);
+							}
+						}
+					}
+					else
+					{
+						var id = SQLite3.LastInsertRowid (Handle);
+						map.SetAutoIncPK (obj, id);
+					}
 				}
 			}
 			if (count > 0)
@@ -2699,24 +2756,34 @@ namespace SQLite
 
 		PreparedSqlLiteInsertCommand CreateInsertCommand (TableMapping map, string extra)
 		{
-			var cols = map.InsertColumns;
 			string insertSql;
-			if (cols.Length == 0 && map.Columns.Length == 1 && map.Columns[0].IsAutoInc) {
-				insertSql = string.Format ("insert {1} into \"{0}\" default values", map.TableName, extra);
+			
+			// Use provider-specific SQL generation if available
+			if (Provider != null && Provider.ProviderName != "SQLite")
+			{
+				insertSql = Provider.GenerateInsertSql(map, extra);
 			}
-			else {
-				var replacing = string.Compare (extra, "OR REPLACE", StringComparison.OrdinalIgnoreCase) == 0;
-
-				if (replacing) {
-					cols = map.InsertOrReplaceColumns;
+			else
+			{
+				// Default SQLite behavior
+				var cols = map.InsertColumns;
+				if (cols.Length == 0 && map.Columns.Length == 1 && map.Columns[0].IsAutoInc) {
+					insertSql = string.Format ("insert {1} into \"{0}\" default values", map.TableName, extra);
 				}
+				else {
+					var replacing = string.Compare (extra, "OR REPLACE", StringComparison.OrdinalIgnoreCase) == 0;
 
-				insertSql = string.Format ("insert {3} into \"{0}\"({1}) values ({2})", map.TableName,
-								   string.Join (",", (from c in cols
-													  select "\"" + c.Name + "\"").ToArray ()),
-								   string.Join (",", (from c in cols
-													  select "?").ToArray ()), extra);
+					if (replacing) {
+						cols = map.InsertOrReplaceColumns;
+					}
 
+					insertSql = string.Format ("insert {3} into \"{0}\"({1}) values ({2})", map.TableName,
+									   string.Join (",", (from c in cols
+														  select "\"" + c.Name + "\"").ToArray ()),
+									   string.Join (",", (from c in cols
+														  select "?").ToArray ()), extra);
+
+				}
 			}
 
 			var insertCommand = new PreparedSqlLiteInsertCommand (this, insertSql);
@@ -2794,7 +2861,7 @@ namespace SQLite
 				ps = new List<object> (vals);
 			}
 			ps.Add (pk.GetValue (obj));
-			var q = string.Format ("update \"{0}\" set {1} where \"{2}\" = ? ", map.TableName, string.Join (",", (from c in cols
+			var q = Provider?.GenerateUpdateSql(map) ?? string.Format ("update \"{0}\" set {1} where \"{2}\" = ? ", map.TableName, string.Join (",", (from c in cols
 																												  select "\"" + c.Name + "\" = ? ").ToArray ()), pk.Name);
 
 			try {
@@ -4961,6 +5028,12 @@ namespace SQLite
 
 		public int ExecuteNonQuery (object[] source)
 		{
+			// Check if we're using a non-SQLite provider
+			if (Connection.Provider != null && Connection.Provider.ProviderName != "SQLite")
+			{
+				return ExecuteAdoNetNonQuery(source);
+			}
+
 			if (Initialized && Statement == NullStatement) {
 				throw new ObjectDisposedException (nameof (PreparedSqlLiteInsertCommand));
 			}
@@ -5023,6 +5096,149 @@ namespace SQLite
 		~PreparedSqlLiteInsertCommand ()
 		{
 			Dispose (false);
+		}
+
+		private int ExecuteAdoNetNonQuery(object[] source)
+		{
+			if (Connection.Trace) {
+				Connection.Tracer?.Invoke ($"[ADO.NET {Connection.Provider.ProviderName}] Executing: " + CommandText);
+			}
+			
+			if (Connection._adoNetConnection == null)
+			{
+				throw new InvalidOperationException("ADO.NET connection is not initialized");
+			}
+			
+			try
+			{
+				// Ensure connection is open
+				if (Connection._adoNetConnection.State != System.Data.ConnectionState.Open)
+				{
+					Connection._adoNetConnection.Open();
+				}
+				
+				using (var command = Connection._adoNetConnection.CreateCommand())
+				{
+					command.CommandText = CommandText;
+					
+					// Bind parameters
+					if (source != null)
+					{
+						for (int i = 0; i < source.Length; i++)
+						{
+							var parameter = command.CreateParameter();
+							
+							// Set parameter name based on provider requirements
+							if (Connection.Provider.RequiresNamedParameters)
+							{
+								parameter.ParameterName = $"{Connection.Provider.ParameterPrefix}param{i}";
+							}
+							else
+							{
+								parameter.ParameterName = $"param{i}";
+							}
+							
+							// Handle null values
+							if (source[i] == null)
+							{
+								parameter.Value = System.DBNull.Value;
+							}
+							else
+							{
+								// Convert value based on type
+								parameter.Value = ConvertValueForAdoNet(source[i], Connection);
+							}
+							
+							command.Parameters.Add(parameter);
+						}
+					}
+					
+					var result = command.ExecuteNonQuery();
+					
+					if (Connection.Trace) {
+						Connection.Tracer?.Invoke ($"[ADO.NET {Connection.Provider.ProviderName}] Rows affected: {result}");
+					}
+					
+					return result;
+				}
+			}
+			catch (Exception ex)
+			{
+				throw SQLiteException.New(SQLite3.Result.Error, $"Failed to execute non-query on {Connection.Provider.ProviderName}: {ex.Message}");
+			}
+		}
+
+		private object ConvertValueForAdoNet(object value, SQLiteConnection conn)
+		{
+			if (value == null) return System.DBNull.Value;
+			
+			// Handle DateTime conversion
+			if (value is DateTime dt)
+			{
+				// For non-SQLite providers, always return DateTime directly
+				// They handle DateTime natively
+				if (conn.Provider != null && conn.Provider.ProviderName != "SQLite")
+				{
+					return dt;
+				}
+				return conn.StoreDateTimeAsTicks ? (object)dt.Ticks : (object)dt;
+			}
+			
+			// Handle DateTimeOffset conversion
+			if (value is DateTimeOffset dto)
+			{
+				// For non-SQLite providers, return appropriate format
+				if (conn.Provider != null && conn.Provider.ProviderName != "SQLite")
+				{
+					if (conn.Provider.ProviderName == "MariaDB")
+					{
+						// MariaDB doesn't have DateTimeOffset, use DateTime
+						return dto.DateTime;
+					}
+					// SQL Server and Azure SQL can handle DateTimeOffset
+					return dto;
+				}
+				return conn.StoreDateTimeAsTicks ? (object)dto.Ticks : (object)dto.ToString("o");
+			}
+			
+			// Handle TimeSpan conversion
+			if (value is TimeSpan ts)
+			{
+				// For non-SQLite providers, return TimeSpan directly or as Time
+				if (conn.Provider != null && conn.Provider.ProviderName != "SQLite")
+				{
+					// SQL Server and MariaDB have TIME type
+					return ts;
+				}
+				return conn.StoreTimeSpanAsTicks ? (object)ts.Ticks : (object)ts.TotalSeconds;
+			}
+			
+			// Handle Guid conversion
+			if (value is Guid guid)
+			{
+				// MariaDB stores GUID as string
+				if (conn.Provider != null && conn.Provider.ProviderName == "MariaDB")
+				{
+					return guid.ToString();
+				}
+				// Most databases can handle Guid directly
+				return guid;
+			}
+			
+			// Handle Enum conversion
+			if (value.GetType().IsEnum)
+			{
+				return Convert.ToInt32(value);
+			}
+			
+			// Handle byte array
+			if (value is byte[] bytes)
+			{
+				return bytes;
+			}
+			
+			// Return value as is for other types
+			return value;
 		}
 	}
 
@@ -5153,7 +5369,8 @@ namespace SQLite
 			}
 
 			var args = new List<object> ();
-			var cmdText = "delete from \"" + Table.TableName + "\"";
+			var quotedTableName = Connection.Provider?.QuoteIdentifier(Table.TableName) ?? ("\"" + Table.TableName + "\"");
+			var cmdText = "delete from " + quotedTableName;
 			var w = CompileExpr (pred, args);
 			cmdText += " where " + w.CommandText;
 
@@ -5310,14 +5527,15 @@ namespace SQLite
 				throw new NotSupportedException ("Joins are not supported.");
 			}
 			else {
-				var cmdText = "select " + selectionList + " from \"" + Table.TableName + "\"";
+				var quotedTableName = Connection.Provider?.QuoteIdentifier(Table.TableName) ?? ("\"" + Table.TableName + "\"");
+				var cmdText = "select " + selectionList + " from " + quotedTableName;
 				var args = new List<object> ();
 				if (_where != null) {
 					var w = CompileExpr (_where, args);
 					cmdText += " where " + w.CommandText;
 				}
 				if ((_orderBys != null) && (_orderBys.Count > 0)) {
-					var t = string.Join (", ", _orderBys.Select (o => "\"" + o.ColumnName + "\"" + (o.Ascending ? "" : " desc")).ToArray ());
+					var t = string.Join (", ", _orderBys.Select (o => (Connection.Provider?.QuoteIdentifier(o.ColumnName) ?? ("\"" + o.ColumnName + "\"")) + (o.Ascending ? "" : " desc")).ToArray ());
 					cmdText += " order by " + t;
 				}
 				if (_limit.HasValue) {
@@ -5496,7 +5714,8 @@ namespace SQLite
 					// Need to translate it if that column name is mapped
 					//
 					var columnName = Table.FindColumnWithPropertyName (mem.Member.Name).Name;
-					return new CompileResult { CommandText = "\"" + columnName + "\"" };
+					var quotedColumnName = Connection.Provider?.QuoteIdentifier(columnName) ?? ("\"" + columnName + "\"");
+					return new CompileResult { CommandText = quotedColumnName };
 				}
 				else {
 					object obj = null;

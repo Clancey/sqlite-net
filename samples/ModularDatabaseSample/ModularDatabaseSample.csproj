@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core SQLite-NET with SQLite provider -->
+    <ProjectReference Include="../../nuget/SQLite-NET.SQLite/SQLite-NET.SQLite.csproj" />
+    
+    <!-- Additional database providers -->
+    <ProjectReference Include="../../nuget/SQLite-NET.MariaDB/SQLite-NET.MariaDB.csproj" />
+    <ProjectReference Include="../../nuget/SQLite-NET.SqlServer/SQLite-NET.SqlServer.csproj" />
+    <ProjectReference Include="../../nuget/SQLite-NET.AzureSql/SQLite-NET.AzureSql.csproj" />
+  </ItemGroup>
+
+</Project>

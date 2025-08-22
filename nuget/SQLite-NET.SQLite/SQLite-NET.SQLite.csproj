@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <PackageId>SQLite-NET.SQLite</PackageId>
+    <PackageVersion>1.11.0</PackageVersion>
+    <Authors>Frank Krueger</Authors>
+    <Owners>Frank Krueger</Owners>
+    <Summary>SQLite-NET ORM with multi-database provider support (SQLite provider included)</Summary>
+    <Description>SQLite-NET is a powerful, cross-platform, and easy-to-use ORM for SQLite databases. This package includes the SQLite provider and supports pluggable database providers for other databases while maintaining full backward compatibility.</Description>
+    <PackageReleaseNotes>Multi-database provider architecture with SQLite as the default provider. Full backward compatibility maintained.</PackageReleaseNotes>
+    <PackageTags>sqlite database sql orm netstandard cross-platform mobile</PackageTags>
+    <PackageProjectUrl>https://github.com/praeclarum/sqlite-net</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>Logo-low.png</PackageIcon>
+    <RepositoryUrl>https://github.com/praeclarum/sqlite-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../SQLite-NET.Core/SQLite-NET.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../Logo-low.png">
+      <Pack>True</Pack>
+      <PackagePath>.</PackagePath>
+    </None>
+  </ItemGroup>
+
+</Project>

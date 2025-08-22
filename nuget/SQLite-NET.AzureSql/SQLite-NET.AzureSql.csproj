@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <PackageId>SQLite-NET.AzureSql</PackageId>
+    <PackageVersion>1.11.0</PackageVersion>
+    <Authors>Frank Krueger</Authors>
+    <Owners>Frank Krueger</Owners>
+    <Summary>Azure SQL provider for SQLite-NET ORM</Summary>
+    <Description>Azure SQL database provider for SQLite-NET. Allows using the familiar SQLite-NET API with Azure SQL databases. Install this package alongside SQLite-NET.SQLite to enable Azure SQL support.</Description>
+    <PackageReleaseNotes>Azure SQL provider for SQLite-NET multi-database architecture</PackageReleaseNotes>
+    <PackageTags>azuresql azure sql database orm provider cloud netstandard</PackageTags>
+    <PackageProjectUrl>https://github.com/praeclarum/sqlite-net</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>Logo-low.png</PackageIcon>
+    <RepositoryUrl>https://github.com/praeclarum/sqlite-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../SQLite-NET.Core/SQLite-NET.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../Logo-low.png">
+      <Pack>True</Pack>
+      <PackagePath>.</PackagePath>
+    </None>
+  </ItemGroup>
+
+</Project>

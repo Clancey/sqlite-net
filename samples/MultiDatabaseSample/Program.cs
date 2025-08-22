@@ -31,6 +31,7 @@ namespace MultiDatabaseSample
         public string LastName { get; set; } = string.Empty;
         
         [Unique]
+        [MaxLength(255)]
         public string Email { get; set; } = string.Empty;
         
         public DateTime RegisteredDate { get; set; }
@@ -155,6 +156,14 @@ namespace MultiDatabaseSample
                 Console.WriteLine($"  Parameter Prefix: {db.Provider.ParameterPrefix}");
             }
 
+            // Drop tables if they exist (clean start)
+            try {
+                db.DropTable<Product>();
+                db.DropTable<Customer>();
+            } catch {
+                // Tables might not exist, that's okay
+            }
+
             // Create tables
             db.CreateTable<Product>();
             db.CreateTable<Customer>();
@@ -218,12 +227,16 @@ namespace MultiDatabaseSample
                 }
             };
 
-            db.InsertAll(customers);
+            // Insert customers one by one to avoid transaction issues
+            foreach (var customer in customers)
+            {
+                db.Insert(customer);
+            }
             Console.WriteLine($"  ✓ Inserted {customers.Count} customers");
 
             // Query data
             var activeProducts = db.Table<Product>()
-                .Where(p => p.IsActive)
+                .Where(p => p.IsActive == true)
                 .OrderBy(p => p.Price)
                 .ToList();
             Console.WriteLine($"  ✓ Found {activeProducts.Count} active products");
