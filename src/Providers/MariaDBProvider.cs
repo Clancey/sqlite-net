@@ -254,7 +254,45 @@ namespace SQLite.Providers
 		// ADO.NET Connection Management
 		public IDbConnection CreateConnection(string connectionString)
 		{
-			return new MySqlConnection(connectionString);
+			var connection = new MySqlConnection(connectionString);
+			
+			// Try to open the connection and create database if needed
+			try
+			{
+				connection.Open();
+				connection.Close(); // Close it since we'll reopen later
+			}
+			catch (MySqlException ex) when (ex.Number == 1049) // Unknown database
+			{
+				// Extract database name from connection string
+				var builder = new MySqlConnectionStringBuilder(connectionString);
+				var databaseName = builder.Database;
+				
+				if (!string.IsNullOrEmpty(databaseName))
+				{
+					// Create a connection without database to create the new database
+					builder.Database = "";
+					using (var masterConnection = new MySqlConnection(builder.ConnectionString))
+					{
+						masterConnection.Open();
+						using (var command = masterConnection.CreateCommand())
+						{
+							// Create database if it doesn't exist
+							command.CommandText = $"CREATE DATABASE IF NOT EXISTS `{databaseName}`";
+							command.ExecuteNonQuery();
+						}
+					}
+					
+					// Now create the connection with the database
+					connection = new MySqlConnection(connectionString);
+				}
+				else
+				{
+					throw; // Re-throw if we can't determine the database name
+				}
+			}
+			
+			return connection;
 		}
 		
 		public void ConfigureConnection(IDbConnection connection)

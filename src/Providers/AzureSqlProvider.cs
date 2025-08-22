@@ -276,7 +276,46 @@ WHEN NOT MATCHED THEN
 		// ADO.NET Connection Management
 		public IDbConnection CreateConnection(string connectionString)
 		{
-			return new SqlConnection(connectionString);
+			var connection = new SqlConnection(connectionString);
+			
+			// Try to open the connection and create database if needed
+			try
+			{
+				connection.Open();
+				connection.Close(); // Close it since we'll reopen later
+			}
+			catch (SqlException ex) when (ex.Number == 4060) // Cannot open database
+			{
+				// Extract database name from connection string
+				var builder = new SqlConnectionStringBuilder(connectionString);
+				var databaseName = builder.InitialCatalog;
+				
+				if (!string.IsNullOrEmpty(databaseName))
+				{
+					// Create a connection to master database to create the new database
+					builder.InitialCatalog = "master";
+					using (var masterConnection = new SqlConnection(builder.ConnectionString))
+					{
+						masterConnection.Open();
+						using (var command = masterConnection.CreateCommand())
+						{
+							// Check if database exists first
+							command.CommandText = $"IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = '{databaseName}') CREATE DATABASE [{databaseName}]";
+							command.ExecuteNonQuery();
+						}
+					}
+					
+					// Now try to open the original connection again
+					connection = new SqlConnection(connectionString);
+					connection.Open();
+				}
+				else
+				{
+					throw; // Re-throw if we can't determine the database name
+				}
+			}
+			
+			return connection;
 		}
 		
 		public void ConfigureConnection(IDbConnection connection)
@@ -284,6 +323,7 @@ WHEN NOT MATCHED THEN
 			// Azure SQL specific connection configuration
 			if (connection is SqlConnection sqlConn)
 			{
+				// Connection is already open from CreateConnection
 				// Azure SQL specific settings could go here
 				// For example, setting connection resiliency options
 			}

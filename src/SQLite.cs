@@ -1070,17 +1070,30 @@ namespace SQLite
 				var @virtual = fts ? "virtual " : string.Empty;
 				var @using = fts3 ? "using fts3 " : fts4 ? "using fts4 " : string.Empty;
 
-				// Build query.
-				var query = "create " + @virtual + "table if not exists \"" + map.TableName + "\" " + @using + "(\n";
-				var decls = map.Columns.Select (p => Orm.SqlDecl (p, StoreDateTimeAsTicks, StoreTimeSpanAsTicks));
-				var decl = string.Join (",\n", decls.ToArray ());
-				query += decl;
-				query += ")";
-				if (map.WithoutRowId) {
-					query += " without rowid";
+#if MULTI_DATABASE_SUPPORT
+				// Use provider-specific CREATE TABLE generation if available
+				if (Provider != null && Provider.ProviderName != "SQLite")
+				{
+					var query = GenerateCreateTableForProvider(map, createFlags);
+					Execute(query);
 				}
+				else
+				{
+#endif
+					// Build query.
+					var query = "create " + @virtual + "table if not exists \"" + map.TableName + "\" " + @using + "(\n";
+					var decls = map.Columns.Select (p => Orm.SqlDecl (p, StoreDateTimeAsTicks, StoreTimeSpanAsTicks));
+					var decl = string.Join (",\n", decls.ToArray ());
+					query += decl;
+					query += ")";
+					if (map.WithoutRowId) {
+						query += " without rowid";
+					}
 
-				Execute (query);
+					Execute (query);
+#if MULTI_DATABASE_SUPPORT
+				}
+#endif
 			}
 			else {
 				result = CreateTableResult.Migrated;
@@ -1291,10 +1304,45 @@ namespace SQLite
 		/// <returns>Zero on success.</returns>
 		public int CreateIndex (string indexName, string tableName, string[] columnNames, bool unique = false)
 		{
+#if MULTI_DATABASE_SUPPORT
+			if (Provider != null && Provider.ProviderName != "SQLite")
+			{
+				return CreateIndexForProvider(indexName, tableName, columnNames, unique);
+			}
+#endif
 			const string sqlFormat = "create {2} index if not exists \"{3}\" on \"{0}\"(\"{1}\")";
 			var sql = String.Format (sqlFormat, tableName, string.Join ("\", \"", columnNames), unique ? "unique" : "", indexName);
 			return Execute (sql);
 		}
+
+#if MULTI_DATABASE_SUPPORT
+		private int CreateIndexForProvider(string indexName, string tableName, string[] columnNames, bool unique)
+		{
+			string sql;
+			
+			if (Provider.ProviderName == "MariaDB")
+			{
+				// MariaDB: Use backticks and doesn't support IF NOT EXISTS for indexes
+				var uniqueStr = unique ? "UNIQUE " : "";
+				sql = $"CREATE {uniqueStr}INDEX `{indexName}` ON `{tableName}` (`{string.Join("`, `", columnNames)}`)";
+			}
+			else if (Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL")
+			{
+				// SQL Server: Check if index exists first
+				var uniqueStr = unique ? "UNIQUE " : "";
+				sql = $@"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = '{indexName}' AND object_id = OBJECT_ID('[{tableName}]'))
+					CREATE {uniqueStr}INDEX [{indexName}] ON [{tableName}] ([{string.Join("], [", columnNames)}])";
+			}
+			else
+			{
+				// Default fallback
+				var uniqueStr = unique ? "unique " : "";
+				sql = $"CREATE {uniqueStr}INDEX IF NOT EXISTS \"{indexName}\" ON \"{tableName}\" (\"{string.Join("\", \"", columnNames)}\")";
+			}
+			
+			return Execute(sql);
+		}
+#endif
 
 		/// <summary>
 		/// Creates an index for the specified table and column.
@@ -1397,9 +1445,157 @@ namespace SQLite
 		/// <param name="tableName">Table name.</param>
 		public List<ColumnInfo> GetTableInfo (string tableName)
 		{
+#if MULTI_DATABASE_SUPPORT
+			// Use provider-specific table info query if available
+			if (Provider != null && Provider.ProviderName != "SQLite")
+			{
+				return GetTableInfoFromProvider(tableName);
+			}
+#endif
 			var query = "pragma table_info(\"" + tableName + "\")";
 			return Query<ColumnInfo> (query);
 		}
+
+#if MULTI_DATABASE_SUPPORT
+		private string GenerateCreateTableForProvider(TableMapping map, CreateFlags createFlags)
+		{
+			var sb = new System.Text.StringBuilder();
+			
+			if (Provider.ProviderName == "MariaDB")
+			{
+				// MariaDB: Use backticks for identifiers
+				sb.Append("CREATE TABLE IF NOT EXISTS `").Append(map.TableName).Append("` (\n");
+				
+				var cols = new List<string>();
+				foreach (var col in map.Columns)
+				{
+					var colDef = new System.Text.StringBuilder();
+					colDef.Append("`").Append(col.Name).Append("` ");
+					
+					// Get the SQL type from provider
+					var sqlType = Provider.GetSqlType(col.ColumnType, col.MaxStringLength);
+					colDef.Append(sqlType);
+					
+					if (col.IsPK)
+					{
+						colDef.Append(" PRIMARY KEY");
+						if (col.IsAutoInc)
+							colDef.Append(" AUTO_INCREMENT");
+					}
+					
+					if (!col.IsNullable && !col.IsPK)
+						colDef.Append(" NOT NULL");
+					
+					// Check if column has unique index
+					var hasUniqueIndex = col.Indices != null && col.Indices.Any(i => i.Unique);
+					if (hasUniqueIndex && !col.IsPK)
+						colDef.Append(" UNIQUE");
+					
+					cols.Add(colDef.ToString());
+				}
+				
+				sb.Append(string.Join(",\n", cols));
+				sb.Append("\n)");
+			}
+			else if (Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL")
+			{
+				// SQL Server: First check if table exists, then create
+				// SQL Server doesn't support IF NOT EXISTS directly
+				sb.Append("IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='").Append(map.TableName).Append("' AND xtype='U')\n");
+				sb.Append("CREATE TABLE [").Append(map.TableName).Append("] (\n");
+				
+				var cols = new List<string>();
+				foreach (var col in map.Columns)
+				{
+					var colDef = new System.Text.StringBuilder();
+					colDef.Append("[").Append(col.Name).Append("] ");
+					
+					// Get the SQL type from provider
+					var sqlType = Provider.GetSqlType(col.ColumnType, col.MaxStringLength);
+					colDef.Append(sqlType);
+					
+					if (col.IsAutoInc)
+						colDef.Append(" IDENTITY(1,1)");
+					
+					if (col.IsPK)
+						colDef.Append(" PRIMARY KEY");
+					
+					if (!col.IsNullable && !col.IsPK)
+						colDef.Append(" NOT NULL");
+					else if (col.IsNullable && !col.IsPK)
+						colDef.Append(" NULL");
+					
+					// Check if column has unique index
+					var hasUniqueIndex = col.Indices != null && col.Indices.Any(i => i.Unique);
+					if (hasUniqueIndex && !col.IsPK)
+						colDef.Append(" UNIQUE");
+					
+					cols.Add(colDef.ToString());
+				}
+				
+				sb.Append(string.Join(",\n", cols));
+				sb.Append("\n)");
+			}
+			
+			return sb.ToString();
+		}
+		
+		private List<ColumnInfo> GetTableInfoFromProvider(string tableName)
+		{
+			var columns = new List<ColumnInfo>();
+			
+			if (Provider.ProviderName == "MariaDB")
+			{
+				// MariaDB/MySQL: Use INFORMATION_SCHEMA
+				var query = @"
+					SELECT 
+						ORDINAL_POSITION - 1 as cid,
+						COLUMN_NAME as name,
+						DATA_TYPE as type,
+						IF(IS_NULLABLE = 'NO', 1, 0) as notnull,
+						COLUMN_DEFAULT as dflt_value,
+						IF(COLUMN_KEY = 'PRI', 1, 0) as pk
+					FROM INFORMATION_SCHEMA.COLUMNS
+					WHERE TABLE_SCHEMA = DATABASE()
+					AND TABLE_NAME = ?
+					ORDER BY ORDINAL_POSITION";
+				
+				// Use CreateCommand to properly handle parameters
+				var cmd = CreateCommand(query, tableName);
+				columns = cmd.ExecuteQuery<ColumnInfo>();
+			}
+			else if (Provider.ProviderName == "SQL Server" || Provider.ProviderName == "Azure SQL")
+			{
+				// SQL Server: Use INFORMATION_SCHEMA
+				var query = @"
+					SELECT 
+						ORDINAL_POSITION - 1 as cid,
+						COLUMN_NAME as name,
+						DATA_TYPE as type,
+						CASE WHEN IS_NULLABLE = 'NO' THEN 1 ELSE 0 END as notnull,
+						COLUMN_DEFAULT as dflt_value,
+						CASE 
+							WHEN EXISTS (
+								SELECT 1 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+								INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+								ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+								WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+								AND kcu.TABLE_NAME = c.TABLE_NAME
+								AND kcu.COLUMN_NAME = c.COLUMN_NAME
+							) THEN 1 ELSE 0 
+						END as pk
+					FROM INFORMATION_SCHEMA.COLUMNS c
+					WHERE TABLE_NAME = @p0
+					ORDER BY ORDINAL_POSITION";
+				
+				// Use CreateCommand to properly handle parameters
+				var cmd = CreateCommand(query, tableName);
+				columns = cmd.ExecuteQuery<ColumnInfo>();
+			}
+			
+			return columns;
+		}
+#endif
 
 		void MigrateTable (TableMapping map, List<ColumnInfo> existingCols)
 		{
